@@ -1,73 +1,61 @@
-'use client';
-import { useEffect, useState } from 'react';
-import { listShapesAction, getShapeAction } from './actions';
-import { ShapeRenderer } from './renderer';
-import { generateBlob } from './generator';
 
-export function StoredBlobsList({ lastMutationTime }) {
-    const [keys, setKeys] = useState([]);
-    const [selectedKey, setSelectedKey] = useState();
-    const [previewData, setPreviewData] = useState();
+const express = require('express');
+const { RtcTokenBuilder, RtcRole } = require('agora-token');
 
-    useEffect(() => {
-        console.log('Fetching keys...');
-        listShapesAction().then((response) => {
-            setKeys(response);
-        });
-    }, [lastMutationTime]);
+// ⚠️ CRITICAL: Replace these placeholders with the actual sensitive keys from your logs.
+// These are the keys found in your uploaded files:
+const APP_ID = '23788a6b52644e6f8c5758f2b2c5d468';
+const APP_CERTIFICATE = 'aacab5eec7ae427b80567b6d2711fe64';
 
-    const onSelect = async (keyName) => {
-        setSelectedKey(keyName);
-        const data = await getShapeAction({ keyName });
-        setPreviewData(data);
-    };
+const PORT = 3000;
+const app = express();
 
-    return (
-        <>
-            <h2 className="mb-4 text-xl text-center">Objects in Blob Store</h2>
-            <div className="bg-white rounded-sm text-neutral-900">
-                <div className="px-4 py-2.5 text-center">
-                    {!keys?.length ? (
-                        <span className="inline-flex w-full justify-center py-1.5">Please upload some shapes!</span>
-                    ) : (
-                        <div className="space-y-1">
-                            {keys.map((keyName) => {
-                                const isSelected = keyName === selectedKey;
-                                return (
-                                    <button
-                                        key={keyName}
-                                        onClick={() => {
-                                            onSelect(keyName);
-                                        }}
-                                        className={
-                                            'inline-flex items-center justify-center w-full px-4 py-1.5 rounded-sm text-neutral-900 ' +
-                                            (isSelected
-                                                ? 'bg-neutral-200'
-                                                : 'cursor-pointer transition hover:bg-neutral-200')
-                                        }
-                                    >
-                                        {keyName}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    )}
-                </div>
-                {previewData && <BlobPreview data={previewData} />}
-            </div>
-        </>
-    );
+// Set up the token expiration time (in seconds)
+// 3600 seconds = 1 hour. This is a common and secure practice.
+const expirationTimeInSeconds = 3600;
+const currentTimestamp = Math.floor(Date.now() / 1000);
+const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+
+// Middleware to prevent caching
+const noCache = (req, resp, next) => {
+  resp.header('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+  resp.header('Expires', '-1');
+  resp.header('Pragma', 'no-cache');
+  next();
 }
 
-function BlobPreview({ data }) {
-    const fullBlobData = generateBlob(data); // Recreates the SVG path by the existing parameters
-    return (
-        <div className="p-4 border-t border-neutral-300 aspect-square">
-            <div className="mb-4 text-center">{data.name}</div>
-            <div className="p-2 font-mono rounded-sm bg-neutral-800 text-neutral-100">
-                {JSON.stringify(data, null, ' ')}
-            </div>
-            <ShapeRenderer svgPath={fullBlobData.svgPath} colors={fullBlobData.parameters.colors} />
-        </div>
+// Endpoint to generate the RTC Token
+app.get('/token', noCache, (req, resp) => {
+    // 1. Get channelName and uid from the request query parameters (matching your log URL)
+    const channelName = req.query.channel;
+    const uid = req.query.uid; // Your log shows uid=0, which is an integer UID.
+
+    if (!channelName) {
+        return resp.status(500).json({ 'error': 'channel parameter is required' });
+    }
+    if (!uid) {
+        return resp.status(500).json({ 'error': 'uid parameter is required' });
+    }
+
+    // 2. Define the user's role: publisher or audience.
+    // Assuming the user initiating the stream is a publisher (host).
+    const role = RtcRole.PUBLISHER; 
+
+    // 3. Generate the token
+    const token = RtcTokenBuilder.buildTokenWithUid(
+        APP_ID, 
+        APP_CERTIFICATE, 
+        channelName, 
+        parseInt(uid), // Ensure UID is an integer
+        role, 
+        privilegeExpiredTs
     );
-}
+
+    // 4. Send the token back to the client
+    return resp.json({ 'token': token });
+});
+
+app.listen(PORT, () => {
+    console.log(`Agora Token Server listening on port: ${PORT}`);
+    console.log(`Test URL: http://localhost:${PORT}/token?channel=kingofseavibes&uid=0`);
+});
