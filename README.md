@@ -1,4 +1,3 @@
-
 <html>
 <head>
 <meta charset="utf-8">
@@ -11,7 +10,7 @@
 <select id="role"><option value="host">Host</option><option value="audience" selected>Audience</option></select>
 <button id="join">Join</button><button id="leave" disabled>Leave</button></div>
 <div id="local">Local (host)</div><div id="remote">Remote (others)</div>
-<script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.20.0.js"></script>
+<script src="https://download.agora.io/sdk/release/AgoraRTC_N.js"></script>
 <script>
 const APP_ID = "c68f1bd91c3648c09a5a197c9b70ddc2";
 const STATIC_TOKEN = "007eJxTYDDb5L9xToys3+OgVs7nhs/kDFY2b5o/3WHRqmNhW8TFlHcrMCSbWaQZJqVYGiYbm5lYJBtYJpomGlqaJ1smmRukpCQb3VimktkQyMhwa/ozJkYGRgYWIAbxmcAkM5hkgb";
