@@ -1,79 +1,295 @@
-<html>
-<head>
-<meta charset="utf-8">
-<title>Agora Live — Kingofseavibe</title>
-<style>body{font-family:Arial;margin:20px}#local,#remote{border:1px solid #ccc;width:48%;height:360px;display:inline-block;vertical-align:top;background:#000;color:#fff}button{padding:8px 12px;margin-right:6px}</style>
-</head>
-<body>
-<h2 style="text-align:center">Agora Live — Kingofseavibe</h2>
-<div>Channel: <input id="channel" value="Kingofseavibe" /> Role:
-<select id="role"><option value="host">Host</option><option value="audience" selected>Audience</option></select>
-<button id="join">Join</button><button id="leave" disabled>Leave</button></div>
-<div id="local">Local (host)</div><div id="remote">Remote (others)</div>
-<script src="https://download.agora.io/sdk/release/AgoraRTC_N.js"></script>
-<script>
-const APP_ID = "c68f1bd91c3648c09a5a197c9b70ddc2";
-const STATIC_TOKEN = "007eJxTYDDb5L9xToys3+OgVs7nhs/kDFY2b5o/3WHRqmNhW8TFlHcrMCSbWaQZJqVYGiYbm5lYJBtYJpomGlqaJ1smmRukpCQb3VimktkQyMhwa/ozJkYGRgYWIAbxmcAkM5hkgb";
-let client=null, localVideo=null, localAudio=null;
-const localEl=document.getElementById('local'), remoteEl=document.getElementById('remote');
-async function initClient(){ if(typeof AgoraRTC==='undefined'){alert('Agora SDK not loaded');return;} client=AgoraRTC.createClient({mode:'live',codec:'vp8'}); client.on('user-published',async(user,mediaType)=>{ await client.subscribe(user,mediaType); if(mediaType==='video'){ const id='player-'+user.uid; let p=document.getElementById(id); if(!p){ p=document.createElement('div'); p.id=id; p.style.width='100%'; p.style.height='360px'; p.style.marginBottom='8px'; remoteEl.appendChild(p);} user.videoTrack.play(id);} if(mediaType==='audio'){ user.audioTrack.play(); }}); client.on('user-unpublished',user=>{ const id='player-'+user.uid; const el=document.getElementById(id); if(el) el.remove(); });}
-async function join(){ const channel=document.getElementById('channel').value||'Kingofseavibe'; const role=document.getElementById('role').value; document.getElementById('join').disabled=true; try{ if(!client) await initClient(); if(role==='host') await client.setClientRole('host'); await client.join(APP_ID, channel, STATIC_TOKEN, null); if(role==='host'){ localVideo=await AgoraRTC.createCameraVideoTrack(); localAudio=await AgoraRTC.createMicrophoneAudioTrack(); localVideo.play(localEl); await client.publish([localVideo, localAudio]); } else { localEl.innerHTML='Viewing as audience'; } document.getElementById('leave').disabled=false; }catch(e){ alert('Could not const express = require('express');
-const { RtcTokenBuilder, RtcRole } = require('agora-token');
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, query, addDoc, serverTimestamp, onSnapshot, limit, doc, getDoc, setDoc } from 'firebase/firestore'; 
+// Necessary for security:
+import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check'; 
 
-// ⚠️ CRITICAL: Replace these placeholders with the actual sensitive keys from your logs.
-// These are the keys found in your uploaded files:
-const APP_ID = '23788a6b52644e6f8c5758f2b2c5d468';
-const APP_CERTIFICATE = 'aacab5eec7ae427b80567b6d2711fe64';
+// Define global variables provided by your environment/build system
+// IMPORTANT: You must set __firebase_config and __app_id in your hosting environment.
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-const PORT = 3000;
-const app = express();
+// --- CRITICAL SECURITY VARIABLE ---
+// You must replace this placeholder with your actual key from the Google reCAPTCHA Admin Console.
+const RECAPTCHA_SITE_KEY = 'YOUR_PUBLIC_RECAPTCHA_V3_SITE_KEY'; 
+// ------------------------------------
 
-// Set up the token expiration time (in seconds)
-// 3600 seconds = 1 hour. This is a common and secure practice.
-const expirationTimeInSeconds = 3600;
-const currentTimestamp = Math.floor(Date.now() / 1000);
-const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+// --- User Profile Picture URL ---
+const userProfilePicUrl = 'https://i.ibb.co/L5Q2j85/image.png'; 
 
-// Middleware to prevent caching
-const noCache = (req, resp, next) => {
-  resp.header('Cache-Control', 'private, no-cache, no-store, must-revalidate');
-  resp.header('Expires', '-1');
-  resp.header('Pragma', 'no-cache');
-  next();
-}
+// --- WELCOME MESSAGE DETAILS ---
+const WELCOME_MESSAGE_ID = 'stream-welcome-banner'; 
+const WELCOME_MESSAGE_TEXT = "Welcome to King of sea water Stream!"; 
+const WELCOME_USER_NAME = 'Stream Bot'; 
+// -------------------------------
 
-// Endpoint to generate the RTC Token
-app.get('/token', noCache, (req, resp) => {
-    // 1. Get channelName and uid from the request query parameters (matching your log URL)
-    const channelName = req.query.channel;
-    const uid = req.query.uid; // Your log shows uid=0, which is an integer UID.
+const LiveChatApp = () => { // Renamed component to LiveChatApp for clarity
+  const [db, setDb] = useState(null);
+  const [userId, setUserId] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const messagesEndRef = useRef(null);
+  const MAX_MESSAGES = 100;
 
-    if (!channelName) {
-        return resp.status(500).json({ 'error': 'channel parameter is required' });
-    }
-    if (!uid) {
-        return resp.status(500).json({ 'error': 'uid parameter is required' });
+  // 1. Initialize Firebase, App Check, and Handle Authentication
+  useEffect(() => {
+    if (!firebaseConfig) {
+      setError("Firebase configuration is missing. Cannot initialize the app.");
+      setIsLoading(false);
+      return;
     }
 
-    // 2. Define the user's role: publisher or audience.
-    // Assuming the user initiating the stream is a publisher (host).
-    const role = RtcRole.PUBLISHER; 
+    try {
+      const app = initializeApp(firebaseConfig);
+      const firestore = getFirestore(app);
+      const userAuth = getAuth(app);
+      
+      setDb(firestore);
 
-    // 3. Generate the token
-    const token = RtcTokenBuilder.buildTokenWithUid(
-        APP_ID, 
-        APP_CERTIFICATE, 
-        channelName, 
-        parseInt(uid), // Ensure UID is an integer
-        role, 
-        privilegeExpiredTs
+      // --- Initialize App Check for security ---
+      if (app && RECAPTCHA_SITE_KEY && RECAPTCHA_SITE_KEY.includes('YOUR_PUBLIC_RECAPTCHA_V3_SITE_KEY') === false) {
+        initializeAppCheck(app, {
+            provider: new ReCaptchaV3Provider(RECAPTCHA_SITE_KEY),
+            isTokenAutoRefreshEnabled: true 
+        });
+      }
+
+      // --- FUNCTION TO CREATE PERMANENT WELCOME MESSAGE ---
+      const createWelcomeMessage = async (firestoreInstance) => {
+        const messagesCollectionPath = `artifacts/${appId}/public/data/messages`;
+        const welcomeDocRef = doc(firestoreInstance, messagesCollectionPath, WELCOME_MESSAGE_ID);
+        const docSnap = await getDoc(welcomeDocRef);
+
+        if (!docSnap.exists()) {
+          await setDoc(welcomeDocRef, {
+            text: WELCOME_MESSAGE_TEXT,
+            // Uses new Date(0) to ensure it appears as the first message
+            createdAt: new Date(0), 
+            userId: 'stream_bot_id',
+            userName: WELCOME_USER_NAME,
+            profilePic: userProfilePicUrl,
+            isSystem: true 
+          });
+        }
+      };
+      // ----------------------------------------------------
+
+      const handleSignIn = async (auth) => {
+        try {
+          if (initialAuthToken) {
+            await signInWithCustomToken(auth, initialAuthToken);
+          } else {
+            await signInAnonymously(auth);
+          }
+        } catch (e) {
+          setError("Failed to sign in. Check console for details.");
+          await signInAnonymously(auth);
+        }
+      };
+      
+      handleSignIn(userAuth);
+      createWelcomeMessage(firestore); 
+
+      const unsubscribeAuth = onAuthStateChanged(userAuth, (user) => {
+        if (user) {
+          setUserId(user.uid);
+        } else {
+          setUserId(null);
+        }
+        setIsLoading(false); 
+      });
+
+      return () => unsubscribeAuth();
+    } catch (e) {
+      setError("Failed to initialize Firebase services.");
+      setIsLoading(false);
+    }
+  }, []); 
+
+  // 2. Real-time Data Listener (onSnapshot with Limit)
+  useEffect(() => {
+    if (!db || !userId) return;
+
+    const messagesCollectionRef = collection(db, `artifacts/${appId}/public/data/messages`);
+    // Limits the number of messages fetched for performance
+    const q = query(messagesCollectionRef, limit(MAX_MESSAGES)); 
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const fetchedMessages = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      fetchedMessages.sort((a, b) => (a.createdAt?.toMillis() || 0) - (b.createdAt?.toMillis() || 0));
+      setMessages(fetchedMessages);
+    }, (e) => {
+      setError("Failed to fetch messages in real-time.");
+    });
+
+    return () => unsubscribe();
+  }, [db, userId]); 
+
+  // 3. Auto-scroll to the latest message
+  useEffect(() => {
+    if (messages.length > 0) {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages]);
+
+  // 4. Handle sending a new message (Includes Stream End Command)
+  const handleSend = async (e) => {
+    e.preventDefault();
+    if (newMessage.trim() === '' || !db || !userId) return;
+
+    try {
+      const messagesCollectionRef = collection(db, `artifacts/${appId}/public/data/messages`);
+      const messageText = newMessage.trim();
+      let finalMessage = messageText;
+      let isSystemEnd = false;
+
+      // --- STREAM END COMMAND CHECK ---
+      if (messageText.toLowerCase() === '/end' && userId) {
+        finalMessage = `Thank you for watching the King of sea water Stream! Follow and subscribe for the next broadcast!`;
+        isSystemEnd = true;
+      }
+      // --------------------------------
+
+      await addDoc(messagesCollectionRef, {
+        text: finalMessage,
+        createdAt: serverTimestamp(),
+        // If system message, use stream_bot_end ID, otherwise use host's UID
+        userId: isSystemEnd ? 'stream_bot_end' : userId, 
+        // Use Stream Bot name for end message, otherwise use host's stream name
+        userName: isSystemEnd ? 'Stream Bot' : "King of sea water", 
+        profilePic: userProfilePicUrl,
+        isSystem: isSystemEnd 
+      });
+
+      setNewMessage(''); 
+    } catch (e) {
+      console.error("Error sending message:", e);
+      setError("Failed to send message. Please check your connection.");
+    }
+  };
+
+  // --- Utility Component for Message Bubble (Tailwind CSS) ---
+  const MessageBubble = ({ msg, isCurrentUser }) => {
+    const timeString = msg.createdAt?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) || 'Sending...';
+    const isSystemMessage = msg.isSystem; 
+
+    return (
+        <div className={`flex ${isCurrentUser ? 'justify-end' : isSystemMessage ? 'justify-center' : 'justify-start'}`}>
+            <div className={`flex flex-col p-3 max-w-full lg:max-w-xl shadow-lg rounded-xl transition duration-300 ${
+                isCurrentUser 
+                    ? 'bg-purple-600 text-white rounded-br-sm' 
+                    : isSystemMessage 
+                        ? 'bg-yellow-800 text-white rounded-lg text-center' 
+                        : 'bg-gray-100 text-gray-800 rounded-tl-sm' 
+            }`}>
+                <div className="flex items-center space-x-2 mb-1">
+                    {!isSystemMessage && (
+                      <img 
+                          src={msg.profilePic || userProfilePicUrl} 
+                          alt="Profile" 
+                          className={`w-6 h-6 rounded-full object-cover border-2 ${
+                              isCurrentUser ? 'border-purple-800' : 'border-gray-300'
+                          }`}
+                      />
+                    )}
+                    <span className={`font-semibold text-sm ${isCurrentUser ? 'text-purple-200' : isSystemMessage ? 'text-yellow-200' : 'text-purple-600'}`}>
+                        {isCurrentUser ? 'You' : msg.userName}
+                    </span>
+                </div>
+                <p className={`break-words text-base ${isCurrentUser ? 'text-white' : isSystemMessage ? 'text-white font-bold' : 'text-gray-900'}`}>{msg.text}</p>
+                <span className={`text-xs mt-1 block text-right ${isCurrentUser ? 'text-purple-300' : isSystemMessage ? 'text-yellow-600' : 'text-gray-500'}`}>
+                    {!isSystemMessage && timeString}
+                </span>
+            </div>
+        </div>
     );
+  };
 
-    // 4. Send the token back to the client
-    return resp.json({ 'token': token });
-});
+  // --- Rendering Logic ---
 
-app.listen(PORT, () => {
-    console.log(`Agora Token Server listening on port: ${PORT}`);
-    console.log(`Test URL: http://localhost:${PORT}/token?channel=kingofseavibes&uid=0`);
-}); 
+  if (error) {
+    return <div className="p-4 bg-red-100 text-red-700 font-mono rounded-lg shadow-xl max-w-lg mx-auto mt-10">Error: {error}</div>;
+  }
+
+  return (
+    <div className="flex flex-col h-screen bg-gray-900 p-2 font-inter text-white">
+      <header className="bg-gray-800 p-4 rounded-t-xl shadow-2xl border-b-4 border-purple-600">
+        <div className="flex justify-between items-center">
+            <h1 className="text-3xl font-extrabold text-white flex items-center">
+                <span className="h-3 w-3 mr-2 rounded-full bg-red-500 animate-pulse shadow-md"></span>
+                Global Live Stream Chat
+            </h1>
+            <span className="bg-red-600 text-white text-xs font-bold px-3 py-1 rounded-full uppercase shadow-lg">
+                LIVE
+            </span>
+        </div>
+        <p className="text-xs mt-2 text-gray-400">
+            {userId 
+                ? <span className="font-mono">Your Viewer ID: {userId}</span>
+                : <span className="font-mono">Connecting to stream...</span>
+            }
+        </p>
+      </header>
+
+      {isLoading ? (
+        <div className="flex-1 flex flex-col items-center justify-center text-purple-400">
+            <svg className="animate-spin h-10 w-10 mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            <span className="text-xl">Loading Stream Chat...</span>
+        </div>
+      ) : (
+        <>
+          <main className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-900">
+            {messages.length === 0 ? (
+                <div className="text-center text-gray-600 mt-10">
+                    The chat is empty. Send the first message to start the stream!
+                </div>
+            ) : (
+                messages.map((msg) => (
+                    <MessageBubble 
+                        key={msg.id} 
+                        msg={msg} 
+                        isCurrentUser={msg.userId === userId}
+                    />
+                ))
+            )}
+            <div ref={messagesEndRef} />
+          </main>
+
+          <footer className="p-4 bg-gray-800 rounded-b-xl shadow-2xl border-t-4 border-purple-600">
+            <form onSubmit={handleSend} className="flex space-x-3">
+              <input
+                type="text"
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                placeholder="Send a message to the stream... (Type /end to finish stream)"
+                className="flex-1 p-3 border border-gray-600 bg-gray-700 text-white rounded-full focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition duration-150 placeholder-gray-400"
+                disabled={!userId}
+              />
+              <button
+                type="submit"
+                className="bg-purple-600 text-white p-3 rounded-full shadow-lg hover:bg-purple-700 disabled:opacity-50 transition duration-150 transform hover:scale-105 flex items-center justify-center"
+                disabled={!userId || newMessage.trim() === ''}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                </svg>
+              </button>
+            </form>
+          </footer>
+        </>
+      )}
+    </div>
+  );
+};
+
+export default LiveChatApp;
