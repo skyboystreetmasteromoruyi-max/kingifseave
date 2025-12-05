@@ -1,41 +1,108 @@
-import React, { useState, useEffect, useRef } from 'react';
+Import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, query, addDoc, serverTimestamp, onSnapshot, limit, doc, getDoc, setDoc } from 'firebase/firestore'; 
+import { getFirestore, collection, query, addDoc, serverTimestamp, onSnapshot, limit, doc, getDoc, setDoc, writeBatch, getDocs, where } from 'firebase/firestore'; 
+// --- SDK IMPORTS FOR MEDIA & STORAGE ---
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+// ⚠️ AGORA SDK: You would use a specific Agora Web or Native SDK here:
+// import AgoraRTC from 'agora-rtc-sdk-ng'; // Example for Web
+// ----------------------------------------
 // Necessary for security:
 import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check'; 
 
 // Define global variables provided by your environment/build system
-// IMPORTANT: You must set __firebase_config and __app_id in your hosting environment.
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+const appId = '1:649938805337:android:e36021963f1eec8f100748'; 
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(firebaseConfig) : null;
 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
+// --- CRITICAL AGORA VARIABLE ---
+const AGORA_APP_ID = 'YOUR_AGORA_APP_ID'; 
+// ------------------------------------
+
 // --- CRITICAL SECURITY VARIABLE ---
-// You must replace this placeholder with your actual key from the Google reCAPTCHA Admin Console.
 const RECAPTCHA_SITE_KEY = 'YOUR_PUBLIC_RECAPTCHA_V3_SITE_KEY'; 
 // ------------------------------------
 
 // --- User Profile Picture URL ---
-const userProfilePicUrl = 'https://i.ibb.co/L5Q2j85/image.png'; 
+// ⚠️ ACTION REQUIRED: Must be provided from Firebase Storage upload.
+const userProfilePicUrl = 'YOUR_DIRECT_PUBLIC_IMAGE_URL_HERE'; 
+// ------------------------------------
+
+// --- BACKGROUND MUSIC LINK (Uses your defined environment variable) ---
+// ⚠️ ACTION REQUIRED: Must be provided from Firebase Storage upload.
+const BACKGROUND_MUSIC_LINK = 'YOUR_SONG_STREAMING_LINK_HERE';
+// -----------------------------
 
 // --- WELCOME MESSAGE DETAILS ---
 const WELCOME_MESSAGE_ID = 'stream-welcome-banner'; 
-const WELCOME_MESSAGE_TEXT = "Welcome to King of sea water Stream!"; 
+const WELCOME_MESSAGE_TEXT = "You are welcome to the life of Kingofseavibe live stream! Let's enjoy, let there be peace, and respect the laws."; 
 const WELCOME_USER_NAME = 'Stream Bot'; 
 // -------------------------------
 
-const LiveChatApp = () => { // Renamed component to LiveChatApp for clarity
+// --- GIFT CATALOG (Simple Array/Object for quick lookup) ---
+const GIFT_CATALOG = {
+    'vibe_heart': { name: 'Vibe Heart', cost: 10, icon: '❤️' },
+    'golden_fish': { name: 'Golden Fish', cost: 50, icon: '🐠' },
+    'water_wave': { name: 'Water Wave', cost: 100, icon: '🌊' },
+};
+const HOST_USER_ID = 'host_king_of_sea_vibes'; // Placeholder for the host's UID
+// -------------------------------------------------------------
+
+// --- AVAILABLE COLORS ARRAY FOR FILTER (Updated) ---
+const COLOR_FILTERS = [
+    { name: 'Default', class: 'bg-gray-900', style: 'text-white', filter: 'none' },
+    { name: 'Classic Black', class: 'bg-black', style: 'text-white', filter: 'none' },
+    { name: 'Grayscale Vibe', class: 'bg-gray-900', style: 'text-white', filter: 'grayscale(100%)' }, // Black & White Effect
+    { name: 'Sea Blue', class: 'bg-blue-900', style: 'text-blue-100', filter: 'none' },
+    { name: 'Ocean Green', class: 'bg-green-900', style: 'text-green-100', filter: 'none' },
+    { name: 'Vibe Purple', class: 'bg-purple-900', style: 'text-purple-100', filter: 'none' }
+];
+// -----------------------------------------
+
+
+const LiveChatApp = () => { 
+  const [app, setApp] = useState(null);
   const [db, setDb] = useState(null);
+  const [storage, setStorage] = useState(null);
   const [userId, setUserId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
+  const [isCalling, setIsCalling] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [userCoins, setUserCoins] = useState(0); 
+  const [streamColor, setStreamColor] = useState(COLOR_FILTERS[0].class); 
+  const [streamTextColor, setStreamTextColor] = useState(COLOR_FILTERS[0].style);
+  const [streamFilter, setStreamFilter] = useState(COLOR_FILTERS[0].filter); 
+  // const [currentTrackIndex, setCurrentTrackIndex] = useState(0); // REMOVED: Reverting music state
   const messagesEndRef = useRef(null);
   const MAX_MESSAGES = 100;
 
-  // 1. Initialize Firebase, App Check, and Handle Authentication
+  // --- AGORA CALL HANDLER (Placeholder for Agora SDK integration) ---
+  const agoraCallHandler = useRef({
+      joinChannel: async (channelName) => {
+          console.log(`[Agora] Joining channel: ${channelName}. Using App ID: ${AGORA_APP_ID}`);
+          setIsCalling(true);
+          // ⚠️ AGORA IMPLEMENTATION: client.join, client.publish logic here
+      },
+      leaveChannel: async () => {
+          console.log("[Agora] Leaving channel.");
+          setIsCalling(false);
+          // ⚠️ AGORA IMPLEMENTATION: client.leave and cleanup logic here
+      }
+  }).current;
+  // --------------------------------------------------------------------------
+
+  // --- UPDATED FUNCTION: Apply Color Filter ---
+  const applyColorFilter = (filter) => {
+    setStreamColor(filter.class);
+    setStreamTextColor(filter.style);
+    setStreamFilter(filter.filter); // Set the CSS filter (grayscale)
+  };
+  // ----------------------------------------
+
+
+  // 1. Initialize Firebase, App Check, Storage, and Auth
   useEffect(() => {
     if (!firebaseConfig) {
       setError("Firebase configuration is missing. Cannot initialize the app.");
@@ -44,15 +111,18 @@ const LiveChatApp = () => { // Renamed component to LiveChatApp for clarity
     }
 
     try {
-      const app = initializeApp(firebaseConfig);
-      const firestore = getFirestore(app);
-      const userAuth = getAuth(app);
+      const firebaseApp = initializeApp(firebaseConfig);
+      const firestore = getFirestore(firebaseApp);
+      const firebaseStorage = getStorage(firebaseApp);
+      const userAuth = getAuth(firebaseApp);
       
+      setApp(firebaseApp);
       setDb(firestore);
+      setStorage(firebaseStorage);
 
       // --- Initialize App Check for security ---
-      if (app && RECAPTCHA_SITE_KEY && RECAPTCHA_SITE_KEY.includes('YOUR_PUBLIC_RECAPTCHA_V3_SITE_KEY') === false) {
-        initializeAppCheck(app, {
+      if (firebaseApp && RECAPTCHA_SITE_KEY && RECAPTCHA_SITE_KEY.includes('YOUR_PUBLIC_RECAPTCHA_V3_SITE_KEY') === false) {
+        initializeAppCheck(firebaseApp, {
             provider: new ReCaptchaV3Provider(RECAPTCHA_SITE_KEY),
             isTokenAutoRefreshEnabled: true 
         });
@@ -67,7 +137,6 @@ const LiveChatApp = () => { // Renamed component to LiveChatApp for clarity
         if (!docSnap.exists()) {
           await setDoc(welcomeDocRef, {
             text: WELCOME_MESSAGE_TEXT,
-            // Uses new Date(0) to ensure it appears as the first message
             createdAt: new Date(0), 
             userId: 'stream_bot_id',
             userName: WELCOME_USER_NAME,
@@ -76,8 +145,7 @@ const LiveChatApp = () => { // Renamed component to LiveChatApp for clarity
           });
         }
       };
-      // ----------------------------------------------------
-
+      
       const handleSignIn = async (auth) => {
         try {
           if (initialAuthToken) {
@@ -97,6 +165,39 @@ const LiveChatApp = () => { // Renamed component to LiveChatApp for clarity
       const unsubscribeAuth = onAuthStateChanged(userAuth, (user) => {
         if (user) {
           setUserId(user.uid);
+          // NEW: Start listening for viewer's coin balance
+          const walletDocRef = doc(firestore, `artifacts/${appId}/private/user_wallets`, user.uid);
+          const unsubscribeWallet = onSnapshot(walletDocRef, (doc) => {
+              if (doc.exists()) {
+                  setUserCoins(doc.data().coins || 0);
+              } else {
+                  // Initialize wallet if it doesn't exist (Gives 100 free coins)
+                  setDoc(walletDocRef, { userId: user.uid, coins: 100, giftsSent: 0 }); 
+                  setUserCoins(100); 
+              }
+          });
+
+          // === LOGIC: LOG THE LOGIN EVENT (For Host Notification) ===
+          const logLoginEvent = async (uid) => {
+            const loginEventsCollectionRef = collection(firestore, `artifacts/${appId}/private/login_events`);
+            const loginDocRef = doc(loginEventsCollectionRef, uid);
+            
+            const docSnap = await getDoc(loginDocRef);
+
+            if (!docSnap.exists()) {
+              await setDoc(loginDocRef, {
+                userId: uid,
+                userName: 'New Stream Viewer',
+                loggedAt: serverTimestamp(),
+                notificationStatus: 'PENDING', 
+              });
+            }
+          };
+
+          logLoginEvent(user.uid);
+          // =============================================================
+
+          return () => { unsubscribeAuth(); unsubscribeWallet(); }; // Cleanup
         } else {
           setUserId(null);
         }
@@ -115,7 +216,6 @@ const LiveChatApp = () => { // Renamed component to LiveChatApp for clarity
     if (!db || !userId) return;
 
     const messagesCollectionRef = collection(db, `artifacts/${appId}/public/data/messages`);
-    // Limits the number of messages fetched for performance
     const q = query(messagesCollectionRef, limit(MAX_MESSAGES)); 
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -139,6 +239,68 @@ const LiveChatApp = () => { // Renamed component to LiveChatApp for clarity
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages]);
+  
+
+  // --- NEW FUNCTIONALITY: SEND GIFT TRANSACTION ---
+  const sendGift = async (giftId) => {
+      if (!db || !userId || !GIFT_CATALOG[giftId]) return;
+
+      const gift = GIFT_CATALOG[giftId];
+      if (userCoins < gift.cost) {
+          setError(`Insufficient Sea Coins! Need ${gift.cost} coins for a ${gift.name}.`);
+          return;
+      }
+      
+      const batch = writeBatch(db);
+      const userWalletRef = doc(db, `artifacts/${appId}/private/user_wallets`, userId);
+      const transactionsCollectionRef = collection(db, `artifacts/${appId}/private/transactions`);
+      const messagesCollectionRef = collection(db, `artifacts/${appId}/public/data/messages`);
+
+      try {
+          // 1. Check current balance (optional security step, better done in Firestore Rules)
+          const walletSnap = await getDoc(userWalletRef);
+          if (walletSnap.data().coins < gift.cost) {
+              setError("Balance check failed. Please refresh or buy more coins.");
+              return;
+          }
+
+          // 2. Deduct coins from sender's wallet
+          const newCoins = walletSnap.data().coins - gift.cost;
+          batch.update(userWalletRef, { coins: newCoins, giftsSent: (walletSnap.data().giftsSent || 0) + 1 });
+
+          // 3. Log the transaction
+          batch.set(doc(transactionsCollectionRef), {
+              senderId: userId,
+              receiverId: HOST_USER_ID,
+              giftId: giftId,
+              valueCoins: gift.cost,
+              timestamp: serverTimestamp(),
+              userName: "King of Sea Vibes", // Logging the host for easy lookup
+          });
+
+          // 4. Send a public chat message about the gift (The "Flashy" part)
+          await addDoc(messagesCollectionRef, {
+              text: `${gift.icon} ${gift.name} sent! (Cost: ${gift.cost} coins)`,
+              createdAt: serverTimestamp(),
+              userId: userId,
+              userName: "King of Sea Vibes", 
+              profilePic: userProfilePicUrl,
+              isSystem: true, // Mark as system or unique gift message
+              giftId: giftId,
+          });
+
+          // 5. Commit the transaction
+          await batch.commit();
+          setError(null); // Clear any previous error
+          console.log(`Successfully sent ${gift.name}. New balance: ${newCoins}`);
+
+      } catch (e) {
+          console.error("Gift transaction failed:", e);
+          setError("Failed to send gift. Please check connection and funds.");
+      }
+  };
+  // -------------------------------------------------------------
+
 
   // 4. Handle sending a new message (Includes Stream End Command)
   const handleSend = async (e) => {
@@ -153,7 +315,7 @@ const LiveChatApp = () => { // Renamed component to LiveChatApp for clarity
 
       // --- STREAM END COMMAND CHECK ---
       if (messageText.toLowerCase() === '/end' && userId) {
-        finalMessage = `Thank you for watching the King of sea water Stream! Follow and subscribe for the next broadcast!`;
+        finalMessage = `Thank you for watching! Water loves you all! Remember to check out Kingofseavibe's songs.`;
         isSystemEnd = true;
       }
       // --------------------------------
@@ -161,133 +323,144 @@ const LiveChatApp = () => { // Renamed component to LiveChatApp for clarity
       await addDoc(messagesCollectionRef, {
         text: finalMessage,
         createdAt: serverTimestamp(),
-        // If system message, use stream_bot_end ID, otherwise use host's UID
         userId: isSystemEnd ? 'stream_bot_end' : userId, 
-        // Use Stream Bot name for end message, otherwise use host's stream name
-        userName: isSystemEnd ? 'Stream Bot' : "King of sea water", 
+        userName: isSystemEnd ? 'Stream Bot' : 'King of Sea Vibes',
         profilePic: userProfilePicUrl,
-        isSystem: isSystemEnd 
+        isSystem: isSystemEnd ? true : false,
       });
 
-      setNewMessage(''); 
+      setNewMessage(''); // Clear the input field
+
     } catch (e) {
       console.error("Error sending message:", e);
-      setError("Failed to send message. Please check your connection.");
     }
   };
+  // -------------------------------------------------------------
 
-  // --- Utility Component for Message Bubble (Tailwind CSS) ---
-  const MessageBubble = ({ msg, isCurrentUser }) => {
-    const timeString = msg.createdAt?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) || 'Sending...';
-    const isSystemMessage = msg.isSystem; 
 
-    return (
-        <div className={`flex ${isCurrentUser ? 'justify-end' : isSystemMessage ? 'justify-center' : 'justify-start'}`}>
-            <div className={`flex flex-col p-3 max-w-full lg:max-w-xl shadow-lg rounded-xl transition duration-300 ${
-                isCurrentUser 
-                    ? 'bg-purple-600 text-white rounded-br-sm' 
-                    : isSystemMessage 
-                        ? 'bg-yellow-800 text-white rounded-lg text-center' 
-                        : 'bg-gray-100 text-gray-800 rounded-tl-sm' 
-            }`}>
-                <div className="flex items-center space-x-2 mb-1">
-                    {!isSystemMessage && (
-                      <img 
-                          src={msg.profilePic || userProfilePicUrl} 
-                          alt="Profile" 
-                          className={`w-6 h-6 rounded-full object-cover border-2 ${
-                              isCurrentUser ? 'border-purple-800' : 'border-gray-300'
-                          }`}
-                      />
-                    )}
-                    <span className={`font-semibold text-sm ${isCurrentUser ? 'text-purple-200' : isSystemMessage ? 'text-yellow-200' : 'text-purple-600'}`}>
-                        {isCurrentUser ? 'You' : msg.userName}
-                    </span>
-                </div>
-                <p className={`break-words text-base ${isCurrentUser ? 'text-white' : isSystemMessage ? 'text-white font-bold' : 'text-gray-900'}`}>{msg.text}</p>
-                <span className={`text-xs mt-1 block text-right ${isCurrentUser ? 'text-purple-300' : isSystemMessage ? 'text-yellow-600' : 'text-gray-500'}`}>
-                    {!isSystemMessage && timeString}
-                </span>
-            </div>
-        </div>
-    );
+  // --- Helper Component for Message Bubble ---
+  const MessageBubble = ({ message }) => {
+      const isSystem = message.isSystem || message.userId === 'stream_bot_id' || message.userId === 'stream_bot_end';
+      const isMyMessage = message.userId === userId && !isSystem;
+
+      let bubbleClass = isMyMessage 
+          ? `${streamColor} ${streamTextColor} self-end rounded-br-none` 
+          : 'bg-gray-700 text-gray-200 self-start rounded-tl-none';
+      
+      let nameClass = isMyMessage ? 'font-bold' : 'text-yellow-400 font-semibold';
+      
+      if (isSystem) {
+          bubbleClass = 'bg-red-900 text-white text-center w-full my-1 rounded-lg';
+          nameClass = 'hidden';
+      }
+
+      return (
+          <div className={`flex w-full ${isMyMessage ? 'justify-end' : 'justify-start'} mb-2`}>
+              <div className={`p-3 max-w-xs rounded-xl shadow-lg ${bubbleClass}`}>
+                  <span className={nameClass}>{message.userName}</span>
+                  <p className="text-sm break-words">{message.text}</p>
+                  {/* Optional: Display timestamp (Requires formatting) */}
+                  {/* <span className="text-xs opacity-50 block mt-1">
+                      {message.createdAt?.toDate().toLocaleTimeString()}
+                  </span> */}
+              </div>
+          </div>
+      );
   };
+  // -------------------------------------------
 
-  // --- Rendering Logic ---
 
-  if (error) {
-    return <div className="p-4 bg-red-100 text-red-700 font-mono rounded-lg shadow-xl max-w-lg mx-auto mt-10">Error: {error}</div>;
-  }
+  // --- Render Loading/Error State ---
+  if (isLoading) return <div className="p-4 text-white">Connecting to the Sea Vibe Stream...</div>;
+  if (error) return <div className="p-4 text-red-400">Error: {error}</div>;
 
+
+  // --- MAIN RENDER FUNCTION ---
   return (
-    <div className="flex flex-col h-screen bg-gray-900 p-2 font-inter text-white">
-      <header className="bg-gray-800 p-4 rounded-t-xl shadow-2xl border-b-4 border-purple-600">
-        <div className="flex justify-between items-center">
-            <h1 className="text-3xl font-extrabold text-white flex items-center">
-                <span className="h-3 w-3 mr-2 rounded-full bg-red-500 animate-pulse shadow-md"></span>
-                Global Live Stream Chat
-            </h1>
-            <span className="bg-red-600 text-white text-xs font-bold px-3 py-1 rounded-full uppercase shadow-lg">
-                LIVE
-            </span>
+    <div className={`flex flex-col h-screen max-h-screen ${streamColor}`} style={{ filter: streamFilter }}>
+      
+      {/* ⚠️ AGORA VIDEO/STREAM VIEW */}
+      <div className="flex-none h-64 bg-black flex items-center justify-center text-white text-xl relative">
+        {isCalling ? "Live Stream Active" : "Stream Is Offline"}
+        <div className="absolute top-2 right-2 p-1 bg-red-600 rounded-full text-xs">
+            {userCoins} Sea Coins
         </div>
-        <p className="text-xs mt-2 text-gray-400">
-            {userId 
-                ? <span className="font-mono">Your Viewer ID: {userId}</span>
-                : <span className="font-mono">Connecting to stream...</span>
-            }
-        </p>
-      </header>
-
-      {isLoading ? (
-        <div className="flex-1 flex flex-col items-center justify-center text-purple-400">
-            <svg className="animate-spin h-10 w-10 mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            <span className="text-xl">Loading Stream Chat...</span>
+        
+        {/* Display Music Link (Uses environment variable) */}
+        <div className="absolute bottom-2 left-2 bg-gray-900 bg-opacity-70 p-1.5 rounded-md text-sm text-yellow-300 font-mono">
+            🎶 Music Link: {BACKGROUND_MUSIC_LINK}
         </div>
-      ) : (
-        <>
-          <main className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-900">
-            {messages.length === 0 ? (
-                <div className="text-center text-gray-600 mt-10">
-                    The chat is empty. Send the first message to start the stream!
-                </div>
-            ) : (
-                messages.map((msg) => (
-                    <MessageBubble 
-                        key={msg.id} 
-                        msg={msg} 
-                        isCurrentUser={msg.userId === userId}
-                    />
-                ))
-            )}
-            <div ref={messagesEndRef} />
-          </main>
-
-          <footer className="p-4 bg-gray-800 rounded-b-xl shadow-2xl border-t-4 border-purple-600">
-            <form onSubmit={handleSend} className="flex space-x-3">
-              <input
-                type="text"
-                value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
-                placeholder="Send a message to the stream... (Type /end to finish stream)"
-                className="flex-1 p-3 border border-gray-600 bg-gray-700 text-white rounded-full focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition duration-150 placeholder-gray-400"
-                disabled={!userId}
-              />
-              <button
-                type="submit"
-                className="bg-purple-600 text-white p-3 rounded-full shadow-lg hover:bg-purple-700 disabled:opacity-50 transition duration-150 transform hover:scale-105 flex items-center justify-center"
-                disabled={!userId || newMessage.trim() === ''}
+      </div>
+      
+      {/* 4. Color Filters / Theming Control */}
+      <div className="flex-none p-2 bg-gray-800 flex flex-wrap justify-center space-x-2">
+          {COLOR_FILTERS.map((filter, index) => (
+              <button 
+                  key={index}
+                  onClick={() => applyColorFilter(filter)}
+                  className={`px-3 py-1 text-xs rounded-full shadow-md transition-all 
+                              ${filter.class} ${filter.style} 
+                              ${streamColor === filter.class && streamFilter === filter.filter ? 'ring-4 ring-yellow-400' : ''}`}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                </svg>
+                  {filter.name}
               </button>
-            </form>
-          </footer>
-        </>
-      )}
+          ))}
+      </div>
+
+
+      {/* 5. Message History/Chat Window */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-2 bg-black bg-opacity-70">
+        {messages.map(message => (
+          <MessageBubble key={message.id} message={message} />
+        ))}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* 6. Gift Bar */}
+      <div className="flex-none p-2 bg-gray-900 flex justify-around">
+          {Object.entries(GIFT_CATALOG).map(([id, gift]) => (
+              <button
+                  key={id}
+                  onClick={() => sendGift(id)}
+                  className="flex flex-col items-center justify-center p-2 rounded-lg bg-gray-700 hover:bg-yellow-600 transition-colors text-white text-xs"
+                  title={`Send ${gift.name} for ${gift.cost} coins`}
+                  disabled={userCoins < gift.cost}
+              >
+                  <span className="text-2xl">{gift.icon}</span>
+                  <span className="mt-1">{gift.cost}C</span>
+              </button>
+          ))}
+      </div>
+
+
+      {/* 7. Input/Controls Bar */}
+      <div className="flex-none p-2 bg-gray-800 border-t border-gray-700">
+        <form onSubmit={handleSend} className="flex space-x-2">
+          <input
+            type="text"
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            placeholder="Say something nice to the King of Sea Water..."
+            className="flex-1 p-2 rounded-lg bg-gray-700 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-yellow-500"
+          />
+          <button 
+            type="submit" 
+            disabled={newMessage.trim() === ''}
+            className="px-4 py-2 bg-yellow-500 text-gray-900 font-bold rounded-lg hover:bg-yellow-600 transition-colors disabled:opacity-50"
+          >
+            Send
+          </button>
+          
+          {/* Agora Call Button (Host Only: Requires Host/Viewer check logic) */}
+          <button 
+            type="button" 
+            onClick={() => isCalling ? agoraCallHandler.leaveChannel() : agoraCallHandler.joinChannel('stream-channel-123')}
+            className={`px-4 py-2 ${isCalling ? 'bg-red-500' : 'bg-green-500'} text-white font-bold rounded-lg transition-colors`}
+          >
+            {isCalling ? 'End Call' : 'Start Call'} 
+          </button>
+        </form>
+      </div>
     </div>
   );
 };
